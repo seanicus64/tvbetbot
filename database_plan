@@ -1,0 +1,16 @@
+bets
+    betid   bet     category    creator     expire  reveal
+    124     W.I.R.F?    SW      sje         3/3/33  4/4/44
+options
+    optid   option  betid   multiplier  
+amounts
+    amounts_id  optid   bettor  amount 
+bank
+    player      balance     in_play
+
+judges
+    name        category
+categories
+    cat_id  name
+cat_nicks
+    nick    cat_id
