@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 import praw
+import prawcore
 import dateparser 
 import sqlite3 as sql
 import random
@@ -39,7 +40,7 @@ def handle_offer(comment):
     * [mult] [option]
     * [mult] [option]
 
-    Ends: [Date]  
+    Closes: [Date]  
     Reveal: [Date]  
     Category: [cat_id]"""
     
@@ -56,11 +57,8 @@ def handle_offer(comment):
         SQL.add_option(o[0], bet_id, o[1], labels[e])
     
     update_hub(cat_id)
-#    text = reply_offer_bet(bet_id)
     my_sender = sender(reply_offer_bet,  comment)
     my_sender(bet_id)
-#    comment.reply(text) #TODO
-    #print("REPLY TO COMMENT: \n\n{}".format(text))
 
 def handle_bet(comment):
     """This handles a comment of someone taking a bet.
@@ -77,6 +75,9 @@ def handle_bet(comment):
     if not bet_info:
         raise Error("bet doesn't exist.")
     cat_id = bet_info[6]
+    closed = bet_info[7]
+    if closed:
+        raise Error("The best is closed.")
     option_id = SQL.find_option(bet_id, option)
     if not option_id: 
         raise Error("Option does not exist.")
@@ -89,10 +90,8 @@ def handle_bet(comment):
     SQL.take_bet(name, option_id, amount, source)
     SQL.change_bank(name, -amount)
     update_hub(cat_id)
-    my_sender = sender(reply_to_bet, comment.author)
+    my_sender = sender(reply_to_bet, comment.author.name)
     my_sender(name, amount, option_id, bet_id, option)
-#    text = reply_to_bet(name, amount, option_id, bet_id, option)
-#    comment.reply(text)
     
 def handle_call(comment):
     """This handles a comment of a judge calling a bet.
@@ -124,18 +123,29 @@ def handle_call(comment):
     all_options = [x[0] for x in SQL.option_info(bet_id)]
     pot = 0
     for o in all_options:
-        pot += SQL.derive_pot_from_bets(o)
+        for amount, player in SQL.derive_pot_from_bets(o):
+            # check if the player is even still on reddit
+            try:
+                reddit.redditor(player).fullname
+            except prawcore.exceptions.NotFound:
+                continue
+            pot += amount
     pot_before = pot
     profit = 0
-    #TODO: inform everyone of their winnings
-    win_comment = comment.reply("{} declared {} to be the winner!".format(comment.author, label))
+    #TODO: make a public comment saying who won
+    #win_comment = comment.reply("{} declared {} to be the winner!".format(comment.author, label))
     for winner in winners:
         name, amount = winner[2:4]
+        try:
+            reddit.redditor(name).fullname
+        except prawcore.exceptions.NotFound:
+            continue
         winnings = int(amount * multiplier)
         SQL.change_bank(name, winnings)
         pot -= winnings
         profit += (winnings / 10)
-        reddit.redditor(winner).message("You won {} betting on {}!".format(winnings, bet_id))
+        my_sender = sender(lambda x, y: "You won {} betting on {}!".format(x, y), name)
+        my_sender(winnings, bet_id)
     creator_new_worth = amount_owned_by_creator + profit + pot
     SQL.change_bank(creator, profit + pot)
     SQL.end_bet(bet_id)
@@ -183,17 +193,23 @@ def parse_offer(comment):
     reveal_date = None
     category = None
     for line in lines:
-        if line.lower().startswith("end:"):
-            end_date = dateparser.parse(line[4:], \
+        if line.lower().startswith("closes:"):
+            if end_date:
+                raise OfferSyntaxError("Only one close date allowed.")
+            end_date = dateparser.parse(line[7:], \
                 settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
         if line.lower().startswith("reveal:"):
+            if reveal_date:
+                raise OfferSyntaxError("Only one reveal date allowed.")
             reveal_date = dateparser.parse(line[7:], \
                 settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
         if line.lower().startswith("category:"):
+            if category:
+                raise OfferSyntaxError("Only one category allowed.")
             line = line.lower()
             category = line.lstrip("category:").strip()
     if not end_date:
-        raise OfferSyntaxError("Invalid end date")
+        raise OfferSyntaxError("Invalid close date")
     if not reveal_date:
         raise OfferSyntaxError("Invalid reveal date.")
     if not category: 
@@ -279,7 +295,9 @@ def offer_fixer(end_date, reveal_date, category):
 def nuke_thread(submission):
 
     submission.comment_sort = "old"
+    i = 0
     for comment in submission.comments.list():
+        i += 1
         if not comment.removed:
             comment.mod.remove()
 def nuke_database():
@@ -386,34 +404,36 @@ def scan(submission):
     """Scans a submission for relevant comments, handles them."""
     submission.comment_sort = "old"
     for comment in submission.comments.list():
-        if hasattr(comment, "removed") and comment.removed: continue
-        print(comment)
+        if hasattr(comment, "removed") and comment.removed: 
+            continue
         parse_comment(comment)
 
 #TODO: decorator for footer
-def reply_error(error, comment):
+def reply_error(error):
     """Handles an error in a comment by replying to the comment saying what's wrong."""
-    footer = "---------  \nTVBetBot"
     text = ""
     text += "Syntax Error: {}  \n".format(error)
     text += "Please see: [wiki for creating an offer]\n\n"
-    text += footer
+    return text
 
 def parse_comment(comment):
     """Parses a comment, handling them of it contains a command as the first word."""
     text = comment.body.split()
+    error_handler = sender(reply_error, comment)
     if text[0] == "!offer_bet":
+        #print("OFFER BET")
         try: handle_offer(comment)
         except OfferSyntaxError as e:
-            reply_error(e, comment)
+            error_handler(str(e))
     if text[0] == "!bet":
         try: handle_bet(comment)
         except Error as e:
-            reply_error(e, comment)
-    if text[0] == "!call_beta":
+            error_handler(str(e))
+    if text[0] == "!call_bet":
         try: handle_call(comment)
         except Error as e:
-            reply_error(e, comment)
+            print(str(e))
+            error_handler(str(e))
                 
 def update_hub(cat_id): 
     """Updates the hub if any of the bets change.  Edits the submission directly."""
@@ -463,7 +483,6 @@ def update_hub(cat_id):
         submission = reddit.submission(id=hub)
         if submission.selftext != body:
             submission.edit(body)
-#    print(body)
 def check_if_changed_status(status):
     if status == "closed":
         targets = SQL.get_next_closing_bets()
@@ -471,22 +490,40 @@ def check_if_changed_status(status):
     elif status == "revealed":
         targets = SQL.get_next_revealed_bets()
         index = 5
+    elif status == "two days":
+        targets = SQL.get_next_to_be_judged()
+        index = 5
     else: raise
     now = datetime.datetime.now(datetime.timezone.utc)
     for t in targets:
-         
+        bet_id = t[0] 
         target_time = datetime.datetime.fromtimestamp(int(t[index]), datetime.timezone.utc)
+        if status == "two days":
+            target_time = target_time + datetime.timedelta(days=2)
         if (target_time - now).total_seconds() <= 0:
-            SQL.cur.execute("""UPDATE bets SET {} = '1'
-                WHERE bet_id = ?
-                """.format(status), (t[0],))
-            SQL.con.commit()
+            if status == "two days":
+                SQL.cur.execute("""
+                    UPDATE bets SET ended = 1
+                    WHERE bet_id = ?
+                    """, (bet_id,))
+                SQL.con.commit()
+                void(bet_id)
+
             if status == "revealed":
-                print("JUDGES PLEASE JUDGE THIS BET!!!!")
                 notify_judges(t)
+                SQL.cur.execute("""
+                    UPDATE bets SET revealed = '1'
+                    WHERE bet_id = ?
+                    """, (bet_id,))
+                SQL.con.commit()
                 
             elif status == "closed":
-                print("bet is now closed.")
+                SQL.cur.execute("""
+                    UPDATE bets set closed = '1'
+                    WHERE bet_id = ?
+                    """, (bet_id,))
+                SQL.con.commit()
+
             update_hub(t[8])
         else:
             break
@@ -505,7 +542,30 @@ def notify_judges(bet):
         message += "If not called within two days, it will be voided and all bets will be refunded."
 
         reddit.redditor(judge[0]).message(title, message)
+def void(bet_id):
+    SQL.cur.execute("""
+        SELECT option_id FROM options
+        WHERE bet_id = ?
+        """, (bet_id,))
+    option_response = SQL.cur.fetchall()
+    for option in option_response:
+        option_id = option[0]
+        SQL.cur.execute("""
+            SELECT * FROM amounts
+            WHERE option_id = ?
+            """, (option_id,))
+        response = SQL.cur.fetchall()
+        for amount in response:
+            name = amount[2]
+            amount = amount[3]
+            SQL.change_bank(name, amount)
+            SQL.cur.execute("""
+                DELETE FROM amounts 
+                WHERE option_id = ?
+                """, (option_id,))
+        SQL.con.commit()
 
+    
 def shutdown(signum, frame):
     """Shuts down the whole thing cleanly if you hit ctrl+c"""
     import sys
@@ -517,16 +577,28 @@ def read_everything(subname):
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     while True: 
+        previous = datetime.datetime.now()
         try:
-            for comment in reddit.subreddit(subname).stream.comments(pause_after=0):# or None? TODO
+            for comment in reddit.subreddit(subname).stream.comments(pause_after=0):
+                # the stream will automatically list the last 100 comments.  This is annoying behavior and
+                # may result in comments being parsed twice.
+                if i < 100:
+                    i += 1
+                    continue
+                i += 1
                 if comment is None:
+                    now = datetime.datetime.now()
+                    previous = now
                     check_if_changed_status("closed")
                     check_if_changed_status("revealed")
+                    check_if_changed_status("two days")
                     continue
-                if i % 100 == 0:
+                else:
+                    parse_comment(comment)
+                if i % 20 == 0:
                     print(i, datetime.datetime.now())
-                i += 1
-                if hasattr(comment, "removed") and comment.removed: continue
+                if hasattr(comment, "removed") and comment.removed: 
+                    continue
         except prawcore.exceptions.RequestException:
             time.sleep(10)
 def message_maker(a, b):
@@ -540,32 +612,30 @@ def sender(function, target):
         target_type = "comment"
     else:
         target_type = "redditor"
+        print("TARGET: {}".format(target))
+        print("TARGETp2: {}".format(type(target)))
+        target = reddit.redditor(target)
     def my_wrapper(*myvars):
         text = function(*myvars)
         text += "\n\n========\n\n"
-        text += "tvbetbot | [subreddit](subreddit) | [Tutorial](tutorial) | [Questions/Issues](Issues)  \n"
+        text += "tvbetbot (beta) | [subreddit](http://www.reddit.com/r/tvbets) | [Tutorial](https://www.reddit.com/r/TVbets/comments/85gahv/tutorial/) | [Questions/Issues](https://www.reddit.com/message/compose?to=sje46)  \n"
         if target_type == "comment":
-            target.reply(text)
+            try:
+                target.reply(text)
+            except praw.exceptions.APIException: pass
         else:
-            target.message("TVBetBot notification", text)
+            try: 
+                target.message("TVBetBot notification", text)
+            except praw.exceptions.APIException: pass
 
     return my_wrapper
-    
-        
-import prawcore
-submission = reddit.submission(id="80a8c9")
-subname = "politics+sje46"
-nuke_database()
-
-rebuild_database()
-#read_everything(subname)
-scan(submission)
-#read_everything(subname)
-#nuke_it_all(submission)
-#rebuild(submission)
-#subname = "mrrobot+politics"
-#read_everything(subname)
+#submission = reddit.submission(id="80a8c9")
+subname = "politics+mrrobot+television+tvbets+sje46"
+read_everything(subname)
 other = """
+TODO: judges can bet, but whichever judge calls it won't get paid out, and will
+be refunded his money back
+Handle PMs
 !bet_offer
     to offer a bet
 !bet_take

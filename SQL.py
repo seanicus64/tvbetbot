@@ -4,7 +4,7 @@ def check_player(author):
     cur.execute("SELECT * FROM bank WHERE player = ? ", (name,))
     results = cur.fetchall()
     if not results:
-        cur.execute("INSERT INTO bank VALUES (?, ?, ?)", (name , 1000, 0))
+        cur.execute("INSERT INTO bank VALUES (?, ?, ?)", (name , 10000, 0))
         con.commit()
 def end_bet(bet_id):
     cur.execute("""UPDATE bets SET ended = '1' WHERE bet_id = ?
@@ -130,12 +130,12 @@ def change_bank(name, winnings):
     pass
 def derive_pot_from_bets(opt_id):
     cur.execute("""
-        SELECT amount FROM amounts
+        SELECT amount, bettor FROM amounts
         WHERE option_id = ?
         """, (opt_id,))
     result = cur.fetchall()
-    if not result: return 0
-    result = sum([x[0] for x in result])
+#    if not result: return 0
+#    result = sum([x[0] for x in result])
     return result
 
 def get_next_closing_bets():
@@ -152,6 +152,15 @@ def get_next_revealed_bets():
         SELECT * FROM bets
         WHERE ended = '0'
         AND revealed = '0'
+        ORDER BY reveal ASC
+        """)
+    result = cur.fetchall()
+    return result
+def get_next_to_be_judged():
+    cur.execute("""
+        SELECT * FROM bets
+        WHERE ended = '0'
+        AND revealed = '1'
         ORDER BY reveal ASC
         """)
     result = cur.fetchall()
