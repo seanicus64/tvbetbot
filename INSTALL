@@ -1,0 +1,6 @@
+You need praw and configparser.
+First register a bot with reddit.com.
+Then put in the bot info into praw.ini.changeme, and rename the file to praw.ini
+next, edit the tvbot.conf file, making sure change "change_this_to_true_to_work" to "True".
+Next, run ./setup to set up the database
+
