@@ -3,6 +3,7 @@ import time
 import praw
 import prawcore
 import dateparser 
+import configparser
 import sqlite3 as sql
 import random
 import signal
@@ -43,10 +44,108 @@ def handle_offer(comment):
     Closes: [Date]  
     Reveal: [Date]  
     Category: [cat_id]"""
+
+    def parse_offer():
+        """parses an !offer_bet command, returning the relevant values"""
+        text = comment.body
+        lines = text.split("\n")
+        lines = [x.strip() for x in lines]
+        first_line = lines[0].split()
+        offer = " ".join(first_line[1:])
+        if not offer: raise OfferSyntaxError("No offer made in first line")
+        try:
+            assert len(offer) <= 255
+        except:
+            raise OfferSyntaxError("Offer must be less than 255 characters long.")
+        if "|" in offer:
+            raise OfferSyntaxError("vertical bars, '|', are not allowed.")
+
+        options = list(filter(lambda l: l.startswith("* "), lines[1:]))
+        if not options:
+            raise OfferSyntaxError("No options given")
+        confirmed = []
+        for o in options:
+            split = o.split()
+            if len(split) < 3:
+                raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
+            odds = split[1]
+            try:
+                odds = float(odds)
+            except ValueError:
+                raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
+            if odds <= 1:
+                raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
+            option = " ".join(split[2:])
+            try:
+                assert len(option) <= 255
+            except: raise OfferSyntaxError("Option must be less than 256 characters long.")
+            if "|" in option:
+                raise OfferSyntaxError("vertical bars, '|', are not allowed.")
+            confirmed.append((option, odds))
+        end_date = None
+        reveal_date = None
+        category = None
+        for line in lines:
+            if line.lower().startswith("closes:"):
+                if end_date:
+                    raise OfferSyntaxError("Only one close date allowed.")
+                end_date = dateparser.parse(line[7:], \
+                    settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
+            if line.lower().startswith("reveal:"):
+                if reveal_date:
+                    raise OfferSyntaxError("Only one reveal date allowed.")
+                reveal_date = dateparser.parse(line[7:], \
+                    settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
+            if line.lower().startswith("category:"):
+                if category:
+                    raise OfferSyntaxError("Only one category allowed.")
+                line = line.lower()
+                category = line.lstrip("category:").strip()
+        if not end_date:
+            raise OfferSyntaxError("Invalid close date")
+        if not reveal_date:
+            raise OfferSyntaxError("Invalid reveal date.")
+        if not category: 
+            raise OfferSyntaxError("Must include category tag")
+        response = (offer, category, end_date, reveal_date, confirmed)
+        return response
     
+    def offer_fixer():
+        """Transforms dates and category id into better forms"""
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if (reveal_date - now).total_seconds() < 0:
+            raise OfferLegalityError("Reveal date set in past.")
+        if (end_date - now).total_seconds() < 0:
+            raise OfferLegalityError("End date set in past.")
+        if (reveal_date - end_date).total_seconds() < 0:
+            raise OfferLegalityError("End date occurs after reveal date.")
+        cat_id = SQL.get_cat_id(category)
+        cat_id = category.upper()
+        response = (cat_id, end_date.timestamp(), reveal_date.timestamp())
+        return response
+
+    def reply_offer_bet(bet_id):
+        """Generates the text for the comment to reply to a !bet_offer comment."""
+        bet, creator, created, expires, reveal, ended, cat_id, closed, revealed = \
+            SQL.bet_info(bet_id)
+        options = SQL.option_info(bet_id)
+        text = ""
+        text += "--------  \n\n"
+        text += "[{}:{}] **Bet**: {}  \n\n\n".format(cat_id, bet_id, bet)
+        text += "|Label|Option|Odds|Probability|\n"
+        text += "|----:|:-----|:--:|:---------:|\n"
+        for o in SQL.option_info(bet_id):
+            _, option, _, multiplier, label = o
+            probability = 1/multiplier
+            text += "|**{}**|{}|{}|{:.3f}|\n".format(label, option, multiplier, probability)
+        text += "\n\n{}".format(human_date(expires))
+        return text
+    
+
     SQL.check_player(comment.author)
-    offer, category, end_date, reveal_date, options = parse_offer(comment)
-    cat_id, end_date, reveal_date = offer_fixer(end_date, reveal_date, category)
+    offer, category, end_date, reveal_date, options = parse_offer( )
+    cat_id, end_date, reveal_date = offer_fixer()
     
     source = "{}//{}".format(comment.link_id[3:], comment.id)
     bet_id = SQL.add_offer(offer, cat_id, comment.author.name, int(comment.created_utc), \
@@ -152,70 +251,7 @@ def handle_call(comment):
     update_hub(cat_id)
     
 
-def parse_offer(comment):
-    """parses an !offer_bet command, returning the relevant values"""
-    text = comment.body
-    lines = text.split("\n")
-    lines = [x.strip() for x in lines]
-    first_line = lines[0].split()
-    offer = " ".join(first_line[1:])
-    if not offer: raise OfferSyntaxError("No offer made in first line")
-    try:
-        assert len(offer) <= 255
-    except:
-        raise OfferSyntaxError("Offer must be less than 255 characters long.")
-    if "|" in offer:
-        raise OfferSyntaxError("vertical bars, '|', are not allowed.")
 
-    options = list(filter(lambda l: l.startswith("* "), lines[1:]))
-    if not options:
-        raise OfferSyntaxError("No options given")
-    confirmed = []
-    for o in options:
-        split = o.split()
-        if len(split) < 3:
-            raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
-        odds = split[1]
-        try:
-            odds = float(odds)
-        except ValueError:
-            raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
-        if odds <= 1:
-            raise OfferSyntaxError("Option syntax must be * [multiplier > 1] [Option]")
-        option = " ".join(split[2:])
-        try:
-            assert len(option) <= 255
-        except: raise OfferSyntaxError("Option must be less than 256 characters long.")
-        if "|" in option:
-            raise OfferSyntaxError("vertical bars, '|', are not allowed.")
-        confirmed.append((option, odds))
-    end_date = None
-    reveal_date = None
-    category = None
-    for line in lines:
-        if line.lower().startswith("closes:"):
-            if end_date:
-                raise OfferSyntaxError("Only one close date allowed.")
-            end_date = dateparser.parse(line[7:], \
-                settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
-        if line.lower().startswith("reveal:"):
-            if reveal_date:
-                raise OfferSyntaxError("Only one reveal date allowed.")
-            reveal_date = dateparser.parse(line[7:], \
-                settings = {"RETURN_AS_TIMEZONE_AWARE" : True, "TIMEZONE" : "UTC"})
-        if line.lower().startswith("category:"):
-            if category:
-                raise OfferSyntaxError("Only one category allowed.")
-            line = line.lower()
-            category = line.lstrip("category:").strip()
-    if not end_date:
-        raise OfferSyntaxError("Invalid close date")
-    if not reveal_date:
-        raise OfferSyntaxError("Invalid reveal date.")
-    if not category: 
-        raise OfferSyntaxError("Must include category tag")
-    response = (offer, category, end_date, reveal_date, confirmed)
-    return response
 
 def parse_bet(comment):
     """Parses a !bet_take comment, returns relevant values."""
@@ -241,22 +277,7 @@ def parse_call(comment):
     label = split[2].upper()
     return bet_id, label
 
-def reply_offer_bet(bet_id):
-    """Generates the text for the comment to reply to a !bet_offer comment."""
-    bet, creator, created, expires, reveal, ended, cat_id, closed, revealed = \
-        SQL.bet_info(bet_id)
-    options = SQL.option_info(bet_id)
-    text = ""
-    text += "--------  \n\n"
-    text += "[{}:{}] **Bet**: {}  \n\n\n".format(cat_id, bet_id, bet)
-    text += "|Label|Option|Odds|Probability|\n"
-    text += "|----:|:-----|:--:|:---------:|\n"
-    for o in SQL.option_info(bet_id):
-        _, option, _, multiplier, label = o
-        probability = 1/multiplier
-        text += "|**{}**|{}|{}|{:.3f}|\n".format(label, option, multiplier, probability)
-    text += "\n\n{}".format(human_date(expires))
-    return text
+
 
 def reply_to_bet(name, amount, option_id, bet_id, option_label):
     """Generates the text for the comment to reply to a !bet_take comment."""
@@ -276,21 +297,7 @@ Follow this bet here: {}""".format(name, amount, bet_id, option_label,\
 
 
     
-def offer_fixer(end_date, reveal_date, category):
-    """Transforms dates and category id into better forms"""
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if (reveal_date - now).total_seconds() < 0:
-        raise OfferLegalityError("Reveal date set in past.")
-    if (end_date - now).total_seconds() < 0:
-        raise OfferLegalityError("End date set in past.")
-    if (reveal_date - end_date).total_seconds() < 0:
-        raise OfferLegalityError("End date occurs after reveal date.")
-    
-    cat_id = SQL.get_cat_id(category)
-    cat_id = category.upper()
-    response = (cat_id, end_date.timestamp(), reveal_date.timestamp())
-    return response
 
 def nuke_thread(submission):
 
@@ -415,13 +422,42 @@ def reply_error(error):
     text += "Syntax Error: {}  \n".format(error)
     text += "Please see: [wiki for creating an offer]\n\n"
     return text
+def handle_add_judge(comment):
+    # check if person adding judge is owner
+    # check if user exists
+    # check if category exists
+    # update database
+    # notify judges and person
+    print(comment.author.name)
+    print(owner)
+    try:
+        assert comment.author.name == owner
+    except:
+        raise Exception("You are not the owner of the bot")
+    try:
+        _, player, category = comment.body.split()[:4]
+    except: 
+        raise Exception("Bad syntax")
+    try:
+        reddit.redditor(player).fullname
+    except prawcore.exceptions.NotFound:
+        raise Exception("Redditor doesn't exist.")
+    try:
+        SQL.get_cat_id(category)
+    except:
+        raise Exception("category doesn't exist.")
+    SQL.remove_judge(category, player)
+    SQL.add_judge(category, player)
+    print("{} added to {}'s judges".format(player, category))
+
+
+
 
 def parse_comment(comment):
     """Parses a comment, handling them of it contains a command as the first word."""
     text = comment.body.split()
     error_handler = sender(reply_error, comment)
     if text[0] == "!offer_bet":
-        #print("OFFER BET")
         try: handle_offer(comment)
         except OfferSyntaxError as e:
             error_handler(str(e))
@@ -433,6 +469,11 @@ def parse_comment(comment):
         try: handle_call(comment)
         except Error as e:
             print(str(e))
+            error_handler(str(e))
+    if text[0] == "!tvbetbot_add_judge":
+        try:
+            handle_add_judge(comment)
+        except Error as e:
             error_handler(str(e))
                 
 def update_hub(cat_id): 
@@ -629,9 +670,15 @@ def sender(function, target):
             except praw.exceptions.APIException: pass
 
     return my_wrapper
-#submission = reddit.submission(id="80a8c9")
-subname = "politics+mrrobot+television+tvbets+sje46"
-read_everything(subname)
+import sys
+if __name__ == "__main__":
+    owner, hub_subreddit, subs = SQL.get_admin_info()
+    comment = reddit.comment("dx4iy2q")
+    comment = reddit.comment("dwsjy5c")
+    parse_comment(comment)
+
+    sys.exit()
+    read_everything(subs)
 other = """
 TODO: judges can bet, but whichever judge calls it won't get paid out, and will
 be refunded his money back
