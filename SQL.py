@@ -165,5 +165,39 @@ def get_next_to_be_judged():
         """)
     result = cur.fetchall()
     return result
-con = sql.connect("example.sql")
+def get_admin_info():
+    cur.execute("""
+        SELECT * FROM admin
+        """)
+    result = cur.fetchone()
+    return result
+def remove_category(cat_id):
+    cur.execute("""
+        DELETE FROM "categories"
+        WHERE cat_id = ?
+        """, (cat_id,))
+    con.commit()
+def add_category(cat_id, description):
+    cur.execute("""
+        INSERT INTO "categories"
+        (cat_id, description)
+        VALUES (?, ?)
+        """, (cat_id, description))
+    con.commit()
+def remove_judge(cat_id, user):
+    cur.execute("""
+        DELETE FROM "judges"
+        WHERE cat_id = ?
+        AND user = ?
+        """, (cat_id, user))
+    con.commit()
+def add_judge(cat_id, user):
+    cur.execute("""
+        INSERT INTO "judges"
+        (user, cat_id)
+        VALUES (?, ?)
+        """, (user, cat_id))
+
+    con.commit()
+con = sql.connect("bets.sql")
 cur = con.cursor()
