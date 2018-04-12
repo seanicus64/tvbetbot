@@ -348,7 +348,7 @@ def update_hub(cat_id):
     description, hub = SQL.cur.fetchone()
     if not hub:
         title = "Active '{}' bets".format(description)
-        submission = reddit.subreddit("sje46").submit(title=title, selftext=body)
+        submission = reddit.subreddit(hub_subreddit).submit(title=title, selftext=body)
         source = str(submission.id)
         SQL.cur.execute("""UPDATE categories SET hub = ? 
             WHERE cat_id = ?
@@ -583,7 +583,7 @@ def sender(function, target):
     def my_wrapper(*myvars):
         text = function(*myvars)
         text += "\n\n========\n\n"
-        text += "tvbetbot (beta) | [subreddit](http://www.reddit.com/r/tvbets) | [Tutorial](https://www.reddit.com/r/TVbets/comments/85gahv/tutorial/) | [Questions/Issues](https://www.reddit.com/message/compose?to=sje46)  \n"
+        text += "tvbetbot (beta) | [subreddit](http://www.reddit.com/r/tvbets) | [Tutorial](https://www.reddit.com/r/TVbets/comments/85gahv/tutorial/) | [Questions/Issues](https://www.reddit.com/message/compose?to={})  \n".format(owner)
         if target_type == "comment":
             try:
                 target.reply(text)
@@ -597,7 +597,7 @@ def sender(function, target):
 import sys
 if __name__ == "__main__":
     owner, hub_subreddit, subs = SQL.get_admin_info()
-    comment = reddit.comment("dx4iy2q")
+#    comment = reddit.comment("dx4iy2q")
 #    offer_comment = reddit.comment("dwsjy5c")
 #    bet_comment = reddit.comment("dvwd7d4")
 #    call_comment = reddit.comment("dx831lh")
