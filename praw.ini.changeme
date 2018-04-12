@@ -17,7 +17,11 @@ reddit_url=https://www.reddit.com
 
 # The URL prefix for short URLs.
 short_url=https://redd.it
-
+[ADMIN]
+owner=
+hub_subreddit=
+subs=
+change_to_true=False
 
 [bot1]
 user_agent=TV Bet Bot 0.1
