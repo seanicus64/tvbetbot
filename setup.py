@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 import sqlite3 as SQL
 import os
+import configparser
 def recreate_database():
-    try:
-        os.remove("bets.sql")
-    except FileNotFoundError:
-        pass
-    con = SQL.connect("bets.sql")
-    cur = con.cursor()
     cur.execute("""
         CREATE TABLE "bank" 
         (player VARCHAR(20) PRIMARY KEY, 
@@ -16,7 +11,7 @@ def recreate_database():
     cur.execute("""
         CREATE TABLE "categories" 
         (cat_id VARCHAR(5) UNIQUE PRIMARY KEY, 
-        description VARCHAR(255), hub VARCHAR[20] DEFAULT NULL);
+        description VARCHAR(255), hub VARCHAR[20] ADMIN NULL);
         """)
     cur.execute("""
         CREATE TABLE "judges" 
@@ -29,7 +24,7 @@ def recreate_database():
         bet VARCHAR(255), creator VARCHAR(20), 
         created int, expires int, reveal int, 
         source VARCHAR(20), ended int, cat_id VARCHAR(5), 
-        closed int DEFAULT '0', revealed int DEFAULT '0', 
+        closed int ADMIN '0', revealed int ADMIN '0', 
         FOREIGN KEY (creator) REFERENCES bank(player), 
         FOREIGN KEY (cat_id) REFERENCES categories(cat_id));
         """)
@@ -48,13 +43,26 @@ def recreate_database():
         REFERENCES options(option_id), 
         FOREIGN KEY (bettor) REFERENCES bank(player));
         """)
-def add_cat(cat_id, desc):
     cur.execute("""
-        INSERT INTO categories VALUES (?, ?)
-        """, (cat_id, desc))
-def add_judge(name, cat_id):
+        CREATE TABLE "admin"
+        (owner VARCHAR(20), hub_subreddit VARCHAR(20), subs VARCHAR(255))
+        """)
+def add_admin(owner, hub_subreddit, subs):
     cur.execute("""
-        INSERT INTO judges VALUES (?, ?)
-        """, (name, cat_id))
+        INSERT INTO "admin"
+        VALUES(?, ?, ?)
+        """, (owner, hub_subreddit, subs))
+try:
+    os.remove("bets.sql")
+except FileNotFoundError:
+    pass
+con = SQL.connect("bets.sql")
+cur = con.cursor()
+parser = configparser.ConfigParser()
+parser.read("praw.ini")
 recreate_database()
-
+owner = parser["ADMIN"]["owner"]
+hub_subreddit = parser["ADMIN"]["hub_subreddit"]
+subs = parser["ADMIN"]["subs"]
+add_admin(owner, hub_subreddit, subs)
+con.commit()
