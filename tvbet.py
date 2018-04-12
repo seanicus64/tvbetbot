@@ -150,6 +150,8 @@ def handle_offer(comment):
     source = "{}//{}".format(comment.link_id[3:], comment.id)
     bet_id = SQL.add_offer(offer, cat_id, comment.author.name, int(comment.created_utc), \
         end_date, reveal_date, source, options)
+    print(offer, cat_id, comment.author.name, int(comment.created_utc), end_date, reveal_date, source, options)
+    print("the bet id is: {}".format(bet_id))
     
     labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     for e, o in enumerate(options):
@@ -169,14 +171,48 @@ def handle_bet(comment):
 
     !bet_take [bet_id] [option_label] [amount]"""
     #TODO: add  numerous bets from same person
-    bet_id, option, amount = parse_bet(comment)
+    def parse_bet():
+        """Parses a !bet_take comment, returns relevant values."""
+        lines = comment.body.split("\n")
+        first_line = lines[0].split()
+        if len(first_line) != 4:
+            raise Error("Command requires exactly four arguments")
+        _, bet_id, label, amount = first_line[:4]
+        if label.upper() not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            raise Error("label must be an ascii letter")
+        if not bet_id.isdigit():
+            raise Error("bet_id must be an integer.")
+        if not amount.isdigit() or int(amount) < 1:
+            raise Error("amount must be an integer greater than zero.")
+
+        amount = int(amount)
+        return bet_id, label, amount
+
+    def reply_to_bet(name, amount, option_id, bet_id, option_label):
+        """Generates the text for the comment to reply to a !bet_take comment."""
+        multiplier = SQL.get_specific_option_info(option_id)[3]
+        new = SQL.get_balance(name)
+        old = new + amount
+        potential_winnings = int(amount * multiplier)
+        follow = "TODO"
+        text = """
+*{}* bet {} on {}.{}  
+Old balance: {}  
+New balance: {}  
+Potential winnings: +{}  
+Follow this bet here: {}""".format(name, amount, bet_id, option_label,\
+                old, new, potential_winnings, follow)
+        return text
+    bet_id, option, amount = parse_bet()
     bet_info = SQL.bet_info(bet_id)
     if not bet_info:
         raise Error("bet doesn't exist.")
+    print("bet exists")
     cat_id = bet_info[6]
     closed = bet_info[7]
     if closed:
         raise Error("The best is closed.")
+    print("bet's opened")
     option_id = SQL.find_option(bet_id, option)
     if not option_id: 
         raise Error("Option does not exist.")
@@ -186,6 +222,7 @@ def handle_bet(comment):
     SQL.check_player(comment.author)
     if not SQL.check_if_enough_money(name, amount):
         raise Error("You don't have enough money.")
+    print("enough money")
     SQL.take_bet(name, option_id, amount, source)
     SQL.change_bank(name, -amount)
     update_hub(cat_id)
@@ -203,12 +240,25 @@ def handle_call(comment):
 
     !bet_call [bet_id] [option_label]
     """
-    bet_id, label = parse_call(comment)
+    def parse_call():
+        """parses a !bet_call comment, returns relevant values."""
+        split = comment.body.split()
+        bet_id = split[1]
+        label = split[2].upper()
+        return bet_id, label
+    bet_id, label = parse_call()
     bet_info = SQL.bet_info(bet_id)
     if not bet_info: 
         raise Error("You called a bet that doesn't exist.")
     creator = bet_info[1]
     cat_id = bet_info[6]
+    closed = bet_info[7]
+    # invalid/bad bet offer
+    if label.lower() == "void":
+       void(bet_id) 
+       return
+    if not closed:
+        raise Error("The bet is still open. If revealed early, maybe void instead.")
     option_id = SQL.find_option(bet_id, label)
     if not option_id: 
         raise Error("You called an option that doesn't exist.")
@@ -234,6 +284,7 @@ def handle_call(comment):
     #TODO: make a public comment saying who won
     #win_comment = comment.reply("{} declared {} to be the winner!".format(comment.author, label))
     for winner in winners:
+        print(winner)
         name, amount = winner[2:4]
         try:
             reddit.redditor(name).fullname
@@ -248,234 +299,18 @@ def handle_call(comment):
     creator_new_worth = amount_owned_by_creator + profit + pot
     SQL.change_bank(creator, profit + pot)
     SQL.end_bet(bet_id)
+    print("We came through to the end!")
+    #TODO: uncommenet
     update_hub(cat_id)
     
 
 
 
-def parse_bet(comment):
-    """Parses a !bet_take comment, returns relevant values."""
-    lines = comment.body.split("\n")
-    first_line = lines[0].split()
-    if len(first_line) != 4:
-        raise Error("Command requires exactly four arguments")
-    _, bet_id, label, amount = first_line[:4]
-    if label.upper() not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        raise Error("label must be an ascii letter")
-    if not bet_id.isdigit():
-        raise Error("bet_id must be an integer.")
-    if not amount.isdigit() or int(amount) < 1:
-        raise Error("amount must be an integer greater than zero.")
-
-    amount = int(amount)
-    return bet_id, label, amount
-
-def parse_call(comment):
-    """parses a !bet_call comment, returns relevant values."""
-    split = comment.body.split()
-    bet_id = split[1]
-    label = split[2].upper()
-    return bet_id, label
-
-
-
-def reply_to_bet(name, amount, option_id, bet_id, option_label):
-    """Generates the text for the comment to reply to a !bet_take comment."""
-    multiplier = SQL.get_specific_option_info(option_id)[3]
-    new = SQL.get_balance(name)
-    old = new + amount
-    potential_winnings = int(amount * multiplier)
-    follow = "TODO"
-    text = """
-*{}* bet {} on {}.{}  
-Old balance: {}  
-New balance: {}  
-Potential winnings: +{}  
-Follow this bet here: {}""".format(name, amount, bet_id, option_label,\
-            old, new, potential_winnings, follow)
-    return text
-
-
-    
-
-
-def nuke_thread(submission):
-
-    submission.comment_sort = "old"
-    i = 0
-    for comment in submission.comments.list():
-        i += 1
-        if not comment.removed:
-            comment.mod.remove()
-def nuke_database():
-    #cur.execute("DELETE FROM categories")
-    SQL.cur.execute("DELETE FROM bets")
-    SQL.cur.execute("DELETE FROM bank")
-    SQL.cur.execute("DELETE FROM amounts")
-    SQL.cur.execute("DELETE FROM options")
-    SQL.cur.execute("DELETE FROM judges")
-    SQL.con.commit()
-
-def nuke_it_all(submission):
-        
-    nuke_thread(submission)
-    nuke_database()
-def rebuild_database():
-    #cur.execute("INSERT INTO categories VALUES ('TEST', 'A test category', NULL)")
-    SQL.cur.execute("INSERT INTO judges VALUES ('sje46', 'TEST')")
-    SQL.con.commit()
-
-def rebuild(submission):
-    rebuild_database()
-    offer_comment_2 = submission.reply("""!offer_bet The capital of Canada is
-
-* 1.25 Ottawa 1
-* 5.0 Toronto
-
-Category: TEST  
-END: Tomorrow
-Reveal: 1/1/2024""")
-    try:
-        parse_offer(offer_comment_2)
-    except Error as e:
-        print(e)
-    return
-    SQL.cur.execute("""SELECT MAX(bet_id) FROM bets""")
-    bet_id2 = SQL.cur.fetchone()[0]
-    
-    offer_comment_2.reply("!bet {} {} {}  \n On behalf of testuser1".format(bet_id2, "A", 67))
-
-
-    offer_comment = submission.reply("""!offer_bet The capital of Colombia is  
-
-* 4.0 Bogota  
-* 2.0 Medellin  
-* 1.5 Cartegena  
-* 1.24 Santa Maria  
-* 1.04 Bucamaranga  
-
-Category: TEST  
-End: 1/1/2020  
-Reveal: 1/1/2024  
-        """)
-
-    parse_comment(offer_comment)
-    SQL.cur.execute("""SELECT MAX(bet_id) FROM bets""")
-    bet_id = SQL.cur.fetchone()[0]
-    for i in range(0):
-        option = random.choice("BC")
-        amount = random.randrange(200, 500)
-        body = "!bet {} {} {}  \nOn behalf of testuser{}".format(bet_id, option, amount, i)
-        take_comment = offer_comment.reply(body)
-        take_comment.author = "sje46".format(i)
-        parse_comment(take_comment)
-    winner = offer_comment.reply("!bet {} A 300  \nOn behalf of testwinner".format(bet_id))
-    winner.author = "sje46"
-    parse_comment(winner)
-
-    judge_comment = offer_comment.reply("!call_bet {} A  \nOn behalf of testjudge".format(bet_id))
-    judge_comment.author = "sje46"
-    parse_comment(judge_comment)
-
-def create_hub_entry(b):
-    """Creates a single entry for a hub."""
-    bet_id, bet, author, created, end, reveal, source, ended, cat_id, closed, revealed = b
-    text = "**bet_id**: {}  \n".format(bet_id)
-    text += "**Bet**: {}  \n\n".format(bet)
-    text += "|Label|Option|Multiplier|Probability|$ Bet|# Bets|\n"
-    text += "|----:|:-----|:--------:|:---------:|:---:|:----:|\n"
-    SQL.cur.execute("""
-        SELECT * FROM options WHERE bet_id = ?
-        """, (bet_id,))
-    options = SQL.cur.fetchall()
-    for o in options:
-        option_text = o[1].replace("|", "\|")
-        line = "|{}|{}|{}|{:.3f}|".format(o[4], option_text, o[3], 1/o[3])
-        money_total = 0
-        number_bets = 0
-        SQL.cur.execute("""
-            SELECT * FROM amounts WHERE option_id = ?
-            """, (o[0],))
-        amounts = SQL.cur.fetchall()
-        for a in amounts:
-            number_bets += 1
-            money_total += a[3]
-        line += "{}|{}|\n".format(money_total, number_bets)
-        text += line
-    text += "**Created by**: {}, [source](/comments/{})  \n\n".format(author, source)
-    text += "**Closes**: {}, **Reveal**: {}\n\n".format(human_date(end), human_date(reveal))
-    
-    text += "\n\n----------------\n\n"
-    return text 
-def scan(submission):
-    """Scans a submission for relevant comments, handles them."""
-    submission.comment_sort = "old"
-    for comment in submission.comments.list():
-        if hasattr(comment, "removed") and comment.removed: 
-            continue
-        parse_comment(comment)
-
-#TODO: decorator for footer
-def reply_error(error):
-    """Handles an error in a comment by replying to the comment saying what's wrong."""
-    text = ""
-    text += "Syntax Error: {}  \n".format(error)
-    text += "Please see: [wiki for creating an offer]\n\n"
-    return text
-def handle_add_judge(comment):
-    # check if person adding judge is owner
-    # check if user exists
-    # check if category exists
-    # update database
-    # notify judges and person
-    print(comment.author.name)
-    print(owner)
-    try:
-        assert comment.author.name == owner
-    except:
-        raise Exception("You are not the owner of the bot")
-    try:
-        _, player, category = comment.body.split()[:4]
-    except: 
-        raise Exception("Bad syntax")
-    try:
-        reddit.redditor(player).fullname
-    except prawcore.exceptions.NotFound:
-        raise Exception("Redditor doesn't exist.")
-    try:
-        SQL.get_cat_id(category)
-    except:
-        raise Exception("category doesn't exist.")
-    SQL.remove_judge(category, player)
-    SQL.add_judge(category, player)
-    print("{} added to {}'s judges".format(player, category))
 
 
 
 
-def parse_comment(comment):
-    """Parses a comment, handling them of it contains a command as the first word."""
-    text = comment.body.split()
-    error_handler = sender(reply_error, comment)
-    if text[0] == "!offer_bet":
-        try: handle_offer(comment)
-        except OfferSyntaxError as e:
-            error_handler(str(e))
-    if text[0] == "!bet":
-        try: handle_bet(comment)
-        except Error as e:
-            error_handler(str(e))
-    if text[0] == "!call_bet":
-        try: handle_call(comment)
-        except Error as e:
-            print(str(e))
-            error_handler(str(e))
-    if text[0] == "!tvbetbot_add_judge":
-        try:
-            handle_add_judge(comment)
-        except Error as e:
-            error_handler(str(e))
-                
+
 def update_hub(cat_id): 
     """Updates the hub if any of the bets change.  Edits the submission directly."""
     #TODO: escape all special characters
@@ -524,6 +359,100 @@ def update_hub(cat_id):
         submission = reddit.submission(id=hub)
         if submission.selftext != body:
             submission.edit(body)
+    
+
+
+
+def create_hub_entry(b):
+    """Creates a single entry for a hub."""
+    bet_id, bet, author, created, end, reveal, source, ended, cat_id, closed, revealed = b
+    text = "**bet_id**: {}  \n".format(bet_id)
+    text += "**Bet**: {}  \n\n".format(bet)
+    text += "|Label|Option|Multiplier|Probability|$ Bet|# Bets|\n"
+    text += "|----:|:-----|:--------:|:---------:|:---:|:----:|\n"
+    SQL.cur.execute("""
+        SELECT * FROM options WHERE bet_id = ?
+        """, (bet_id,))
+    options = SQL.cur.fetchall()
+    for o in options:
+        option_text = o[1].replace("|", "\|")
+        line = "|{}|{}|{}|{:.3f}|".format(o[4], option_text, o[3], 1/o[3])
+        money_total = 0
+        number_bets = 0
+        SQL.cur.execute("""
+            SELECT * FROM amounts WHERE option_id = ?
+            """, (o[0],))
+        amounts = SQL.cur.fetchall()
+        for a in amounts:
+            number_bets += 1
+            money_total += a[3]
+        line += "{}|{}|\n".format(money_total, number_bets)
+        text += line
+    text += "**Created by**: {}, [source](/comments/{})  \n\n".format(author, source)
+    text += "**Closes**: {}, **Reveal**: {}\n\n".format(human_date(end), human_date(reveal))
+    
+    text += "\n\n----------------\n\n"
+    return text 
+
+#TODO: decorator for footer
+def reply_error(error):
+    """Handles an error in a comment by replying to the comment saying what's wrong."""
+    text = ""
+    text += "Syntax Error: {}  \n".format(error)
+    text += "Please see: [wiki for creating an offer]\n\n"
+    return text
+def handle_add_judge(comment):
+    # check if person adding judge is owner
+    # check if user exists
+    # check if category exists
+    # update database
+    # notify judges and person
+    try:
+        assert comment.author.name == owner
+    except:
+        raise Exception("You are not the owner of the bot")
+    try:
+        _, player, category = comment.body.split()[:4]
+    except: 
+        raise Exception("Bad syntax")
+    try:
+        reddit.redditor(player).fullname
+    except prawcore.exceptions.NotFound:
+        raise Exception("Redditor doesn't exist.")
+    try:
+        SQL.get_cat_id(category)
+    except:
+        raise Exception("category doesn't exist.")
+    SQL.remove_judge(category, player)
+    SQL.add_judge(category, player)
+    print("{} added to {}'s judges".format(player, category))
+
+
+
+
+def parse_comment(comment):
+    """Parses a comment, handling them of it contains a command as the first word."""
+    text = comment.body.split()
+    error_handler = sender(reply_error, comment)
+    if text[0] == "!offer_bet":
+        try: handle_offer(comment)
+        except OfferSyntaxError as e:
+            error_handler(str(e))
+    if text[0] == "!bet":
+        try: handle_bet(comment)
+        except Error as e:
+            error_handler(str(e))
+    if text[0] == "!call_bet":
+        try: handle_call(comment)
+        except Error as e:
+            print(str(e))
+            error_handler(str(e))
+    if text[0] == "!tvbetbot_add_judge":
+        try:
+            handle_add_judge(comment)
+        except Error as e:
+            error_handler(str(e))
+                
 def check_if_changed_status(status):
     if status == "closed":
         targets = SQL.get_next_closing_bets()
@@ -642,11 +571,6 @@ def read_everything(subname):
                     continue
         except prawcore.exceptions.RequestException:
             time.sleep(10)
-def message_maker(a, b):
-    message = "first param: {}, second: {}".format(a, b)
-    return message
-def message_maker_2(a, b, c): 
-    message = "first param: {}, second: {} third: {}".format(a, b, c)
     return message
 def sender(function, target):    
     if type(target) is praw.models.reddit.comment.Comment:
@@ -674,10 +598,17 @@ import sys
 if __name__ == "__main__":
     owner, hub_subreddit, subs = SQL.get_admin_info()
     comment = reddit.comment("dx4iy2q")
-    comment = reddit.comment("dwsjy5c")
-    parse_comment(comment)
+#    offer_comment = reddit.comment("dwsjy5c")
+#    bet_comment = reddit.comment("dvwd7d4")
+#    call_comment = reddit.comment("dx831lh")
+#    print(offer_comment.body)
+#    print(bet_comment.body)
+#    print(call_comment.body)
+#    parse_comment(offer_comment)
+#    parse_comment(bet_comment)
+#    parse_comment(call_comment)
 
-    sys.exit()
+#    sys.exit()
     read_everything(subs)
 other = """
 TODO: judges can bet, but whichever judge calls it won't get paid out, and will
