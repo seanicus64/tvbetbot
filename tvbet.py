@@ -565,8 +565,8 @@ def read_everything(subname):
                     continue
                 else:
                     parse_comment(comment)
-                if i % 20 == 0:
-                    print(i, datetime.datetime.now())
+                if i % 500 == 0:
+                    print("#{} @ {}".format(i, datetime.datetime.now()))
                 if hasattr(comment, "removed") and comment.removed: 
                     continue
         except prawcore.exceptions.RequestException:
